@@ -15,7 +15,7 @@ def check_password():
     """Returns `True` if the user had the correct password."""
     
     # SET YOUR PASSWORD HERE
-    correct_password = "bonker123" 
+    correct_password = st.secrets["PASSWORD"] 
 
     if "password_correct" not in st.session_state:
         st.session_state.password_correct = False
