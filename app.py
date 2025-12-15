@@ -66,6 +66,7 @@ if st.sidebar.button("🔒 LOCK SYSTEM"):
     st.session_state.password_correct = False
     st.rerun()
 
+stop_btn = st.sidebar.button("🟥 STOP DATA ENGINE")
 
 # --- 4. DATA ENGINE ---
 def fetch_data(symbol):
