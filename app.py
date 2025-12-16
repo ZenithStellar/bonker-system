@@ -8,7 +8,7 @@ import requests
 
 # --- 1. CONFIGURATION ---
 warnings.filterwarnings("ignore")
-st.set_page_config(page_title="Bonker V5.3", layout="wide", page_icon="🏆")
+st.set_page_config(page_title="Bonker V3", layout="wide", page_icon="🏆")
 
 # --- 🔐 KEYPASS SYSTEM ---
 def check_password():
@@ -180,7 +180,7 @@ def analyze_hierarchy(df_setup, df_filter, df_trigger, setup_name, filter_name, 
     elif curr_trigger_state == setup_state:
         return f"⚠️ HRCF {setup_dir}", f"Setup: {setup_name} {setup_dir} | Type: HRCF ({trigger_name}) | Status: CF Formed (Aggressive)", "#FF9100"
 
-    # C. WAITING CF (VR is Formed, but no break yet)
+    # C. WAITING CF
     else:
         return "💤 WAITING CF", f"Setup: {setup_name} {setup_dir} | Type: {filter_name} VR | Status: VR Formed (Waiting Break)", "#37474F"
 
@@ -202,29 +202,38 @@ def plot_candlestick(df, title, state):
     )
     return fig
 
-# --- 7. ALERTS (UPDATED FORMAT) ---
+# --- 7. ALERTS (ANTI-SPAM FIX) ---
 def send_telegram_msg(message):
     if not enable_tg or not tg_token or not tg_chat_id: return
     try: requests.post(f"https://api.telegram.org/bot{tg_token}/sendMessage", data={"chat_id": tg_chat_id, "text": message}, timeout=5)
     except: pass
 
-if "alert_state" not in st.session_state: st.session_state.alert_state = {}
+# Init Session State for History
+if "alert_history" not in st.session_state: st.session_state.alert_history = {}
 
 def check_and_alert(header, signal, desc):
-    sig_key = f"{header}|{signal}"
-    last_sig = st.session_state.alert_state.get(header, None)
+    # 1. Build the exact potential message body
+    icon = "💎" if "LRCF" in signal else "⚠️"
+    formatted_desc = desc.replace(" | ", "\n")
     
-    if sig_key != last_sig:
-        st.session_state.alert_state[header] = sig_key
+    # This is the string we compare
+    current_msg_body = f"{icon} **{header} SIGNAL**\n{formatted_desc}"
+    
+    # 2. Get the last sent message for this Header (e.g., Weekly)
+    last_msg_body = st.session_state.alert_history.get(header, None)
+    
+    # 3. STRICT COMPARISON: If text is exactly the same, DO NOTHING.
+    if current_msg_body != last_msg_body:
+        # Update history
+        st.session_state.alert_history[header] = current_msg_body
         
+        # Only send if it's an actionable signal (LRCF or HRCF)
         if "LRCF" in signal or "HRCF" in signal:
-            icon = "💎" if "LRCF" in signal else "⚠️"
-            formatted_desc = desc.replace(" | ", "\n")
-            msg = f"{icon} **{header} SIGNAL**\n{formatted_desc}\n🔥 CHECK CHART"
-            send_telegram_msg(msg)
+            final_msg = f"{current_msg_body}\n🔥 CHECK CHART"
+            send_telegram_msg(final_msg)
 
 # --- 8. MAIN EXECUTION ---
-st.title(f"🏆 BONKER V5.3: STABLE ALERTS ({symbol})")
+st.title(f"🏆 BONKER V5.4: STABLE SYSTEM ({symbol})")
 
 tabs = st.tabs(["Weekly", "Daily", "H4", "H1", "M30"])
 
@@ -251,50 +260,45 @@ try:
                 check_and_alert("WEEKLY SETUP", sig, desc)
                 st.markdown(f"<div style='background:{col};padding:10px;border-radius:5px;text-align:center;'><h3>{sig}</h3><p>{desc}</p></div>", unsafe_allow_html=True)
                 c1, c2, c3 = st.columns(3)
-                # ADDED UNIQUE KEYS HERE
-                with c1: st.plotly_chart(plot_candlestick(df_w1, "W1", s_w1), use_container_width=True, key="w1_setup")
-                with c2: st.plotly_chart(plot_candlestick(df_d1, "D1", s_d1), use_container_width=True, key="w1_filter")
-                with c3: st.plotly_chart(plot_candlestick(df_h4, "H4", s_h4), use_container_width=True, key="w1_trigger")
+                with c1: st.plotly_chart(plot_candlestick(df_w1, "W1", s_w1), use_container_width=True, key="w1_s")
+                with c2: st.plotly_chart(plot_candlestick(df_d1, "D1", s_d1), use_container_width=True, key="w1_f")
+                with c3: st.plotly_chart(plot_candlestick(df_h4, "H4", s_h4), use_container_width=True, key="w1_t")
 
             with tabs[1]:
                 sig, desc, col = analyze_hierarchy(df_d1, df_h4, df_h1, "D1", "H4", "H1")
                 check_and_alert("DAILY SETUP", sig, desc)
                 st.markdown(f"<div style='background:{col};padding:10px;border-radius:5px;text-align:center;'><h3>{sig}</h3><p>{desc}</p></div>", unsafe_allow_html=True)
                 c1, c2, c3 = st.columns(3)
-                # ADDED UNIQUE KEYS HERE
-                with c1: st.plotly_chart(plot_candlestick(df_d1, "D1", s_d1), use_container_width=True, key="d1_setup")
-                with c2: st.plotly_chart(plot_candlestick(df_h4, "H4", s_h4), use_container_width=True, key="d1_filter")
-                with c3: st.plotly_chart(plot_candlestick(df_h1, "H1", s_h1), use_container_width=True, key="d1_trigger")
+                with c1: st.plotly_chart(plot_candlestick(df_d1, "D1", s_d1), use_container_width=True, key="d1_s")
+                with c2: st.plotly_chart(plot_candlestick(df_h4, "H4", s_h4), use_container_width=True, key="d1_f")
+                with c3: st.plotly_chart(plot_candlestick(df_h1, "H1", s_h1), use_container_width=True, key="d1_t")
 
             with tabs[2]:
                 sig, desc, col = analyze_hierarchy(df_h4, df_h1, df_m30, "H4", "H1", "M30")
                 check_and_alert("H4 SETUP", sig, desc)
                 st.markdown(f"<div style='background:{col};padding:10px;border-radius:5px;text-align:center;'><h3>{sig}</h3><p>{desc}</p></div>", unsafe_allow_html=True)
                 c1, c2, c3 = st.columns(3)
-                # ADDED UNIQUE KEYS HERE
-                with c1: st.plotly_chart(plot_candlestick(df_h4, "H4", s_h4), use_container_width=True, key="h4_setup")
-                with c2: st.plotly_chart(plot_candlestick(df_h1, "H1", s_h1), use_container_width=True, key="h4_filter")
-                with c3: st.plotly_chart(plot_candlestick(df_m30, "M30", s_m30), use_container_width=True, key="h4_trigger")
+                with c1: st.plotly_chart(plot_candlestick(df_h4, "H4", s_h4), use_container_width=True, key="h4_s")
+                with c2: st.plotly_chart(plot_candlestick(df_h1, "H1", s_h1), use_container_width=True, key="h4_f")
+                with c3: st.plotly_chart(plot_candlestick(df_m30, "M30", s_m30), use_container_width=True, key="h4_t")
 
             with tabs[3]:
                 sig, desc, col = analyze_hierarchy(df_h1, df_m30, df_m15, "H1", "M30", "M15")
                 check_and_alert("H1 SETUP", sig, desc)
                 st.markdown(f"<div style='background:{col};padding:10px;border-radius:5px;text-align:center;'><h3>{sig}</h3><p>{desc}</p></div>", unsafe_allow_html=True)
                 c1, c2, c3 = st.columns(3)
-                # ADDED UNIQUE KEYS HERE
-                with c1: st.plotly_chart(plot_candlestick(df_h1, "H1", s_h1), use_container_width=True, key="h1_setup")
-                with c2: st.plotly_chart(plot_candlestick(df_m30, "M30", s_m30), use_container_width=True, key="h1_filter")
-                with c3: st.plotly_chart(plot_candlestick(df_m15, "M15", s_m15), use_container_width=True, key="h1_trigger")
+                with c1: st.plotly_chart(plot_candlestick(df_h1, "H1", s_h1), use_container_width=True, key="h1_s")
+                with c2: st.plotly_chart(plot_candlestick(df_m30, "M30", s_m30), use_container_width=True, key="h1_f")
+                with c3: st.plotly_chart(plot_candlestick(df_m15, "M15", s_m15), use_container_width=True, key="h1_t")
 
             with tabs[4]:
                 sig, desc, col = analyze_hierarchy(df_m30, df_m15, df_m5, "M30", "M15", "M5")
                 check_and_alert("M30 SETUP", sig, desc)
                 st.markdown(f"<div style='background:{col};padding:10px;border-radius:5px;text-align:center;'><h3>{sig}</h3><p>{desc}</p></div>", unsafe_allow_html=True)
                 c1, c2, c3 = st.columns(3)
-                # ADDED UNIQUE KEYS HERE
-                with c1: st.plotly_chart(plot_candlestick(df_m30, "M30", s_m30), use_container_width=True, key="m30_setup")
-                with c2: st.plotly_chart(plot_candlestick(df_m15, "M15", s_m15), use_container_width=True, key="m30_filter")
-                with c3: st.plotly_chart(plot_candlestick(df_m5, "M5", s_m5), use_container_width=True, key="m30_trigger")
+                with c1: st.plotly_chart(plot_candlestick(df_m30, "M30", s_m30), use_container_width=True, key="m30_s")
+                with c2: st.plotly_chart(plot_candlestick(df_m15, "M15", s_m15), use_container_width=True, key="m30_f")
+                with c3: st.plotly_chart(plot_candlestick(df_m5, "M5", s_m5), use_container_width=True, key="m30_t")
 
             time.sleep(refresh_rate)
             st.rerun()
