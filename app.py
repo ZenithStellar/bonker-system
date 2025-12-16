@@ -233,7 +233,7 @@ try:
         if df_d_raw is not None and df_5m_raw is not None:
             # NOISE FILTER: M5/M15 need higher sensitivity to avoid fake breakouts
             sens_norm = sensitivity 
-            sens_entry = sensitivity + 4 
+            sens_entry = sensitivity 
 
             df_d, s_d = calculate_structure(df_d_raw, sens_norm)
             df_h4, s_h4 = calculate_structure(resample_data(df_5m_raw.copy(), "4h"), sens_norm)
