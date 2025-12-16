@@ -9,7 +9,7 @@ import requests
 
 # --- 1. CONFIGURATION ---
 warnings.filterwarnings("ignore")
-st.set_page_config(page_title="Bonker V3.0 (Secure)", layout="wide", page_icon="🏆")
+st.set_page_config(page_title="Bonker V3.1 (Fast Alert)", layout="wide", page_icon="🏆")
 
 # --- 🔐 KEYPASS SYSTEM ---
 def check_password():
@@ -56,19 +56,18 @@ st.markdown("""
 st.sidebar.header("⚙️ Master Settings")
 
 # --- 🟢 SECURE CREDENTIAL LOADING ---
-# This looks for secrets.toml (Local) or Secrets Dashboard (Cloud)
 try:
     DEFAULT_BOT_TOKEN = st.secrets["telegram"]["bot_token"]
     DEFAULT_CHAT_ID = st.secrets["telegram"]["chat_id"]
     DEFAULT_ENABLE = True
 except (FileNotFoundError, KeyError):
-    # If no secrets found, leave blank
     DEFAULT_BOT_TOKEN = ""
     DEFAULT_CHAT_ID = ""
     DEFAULT_ENABLE = False
 
 symbol = st.sidebar.text_input("Symbol", value="GC=F") 
-refresh_rate = st.sidebar.slider("Refresh Speed (s)", 5, 300, 5)
+# UPDATED: Default refresh speed set to 10s for Scalping
+refresh_rate = st.sidebar.slider("Refresh Speed (s)", 5, 300, 5) 
 sensitivity = st.sidebar.number_input("Structure Sensitivity", min_value=1, max_value=10, value=2)
 
 # --- 🤖 TELEGRAM SETTINGS ---
@@ -168,7 +167,8 @@ def analyze_strict_cycle(df_trend, df_entry, trend_state, type_label="ENTRY"):
     count_cf = len(conf_groups)
     
     if current_child_state == opp_state:
-        return f"⏳ WAITING {type_label}", "Active VR (Loading...)", "#FF6D00"
+        # UPDATED TEXT HERE
+        return f"⏳ WAITING {type_label}", "Active VR (Formed)", "#FF6D00"
     elif count_cf == 1:
         if current_child_state == trend_state:
             return f"💎 {type_label} (Fresh)", "Fresh Break of Latest VR", "#00C853"
@@ -215,12 +215,17 @@ def check_and_alert_custom(header_name, parent_tf_name, parent_state, main_sig, 
         # --- Logic to match your requested format ---
         if "FRESH" in main_sig or "ENTRY" in main_sig:
             msg = f"💎 **{header_name} UPDATE**\n{parent_tf_name} is {trend_dir}.\nCF Formed.\n🔥 ENTRY NOW"
+        
+        # UPDATED: Explicitly mention "VR Formed, Waiting CF"
         elif "Active VR" in detail_sig or "Pullback Active" in detail_sig or "Pullback Active" in main_sig:
-            msg = f"⏳ **{header_name} UPDATE**\n{parent_tf_name} is {trend_dir}.\nVR is Active.\nWaiting CF."
+            msg = f"⏳ **{header_name} UPDATE**\n{parent_tf_name} is {trend_dir}.\nVR Formed.\nWaiting CF."
+        
         elif "WAITING VR" in main_sig or "WAITING H1 PULLBACK" in main_sig:
              msg = f"💤 **{header_name} UPDATE**\n{parent_tf_name} is {trend_dir}.\nWaiting for VR (Pullback)."
+        
         elif "CONTINUATION" in main_sig:
              msg = f"🚀 **{header_name} UPDATE**\n{parent_tf_name} is {trend_dir}.\nTrend Continuing (Late)."
+        
         else:
             msg = f"ℹ️ **{header_name} UPDATE**\n{parent_tf_name} is {trend_dir}.\nStatus: {main_sig}"
 
