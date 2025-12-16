@@ -10,7 +10,7 @@ import os
 
 # --- 1. CONFIGURATION ---
 warnings.filterwarnings("ignore")
-st.set_page_config(page_title="Bonker V6.0", layout="wide", page_icon="🏆")
+st.set_page_config(page_title="Bonker V7.0 (Debug Memory)", layout="wide", page_icon="🏆")
 
 # --- 🔐 KEYPASS SYSTEM ---
 def check_password():
@@ -85,7 +85,6 @@ def fetch_hierarchical_data(symbol):
         df_short = yf.download(symbol, period="5d", interval="5m", progress=False, auto_adjust=False)
         return clean_data(df_long), clean_data(df_mid), clean_data(df_short)
     except Exception as e:
-        print(e)
         return None, None, None
 
 def resample_data(df, tf):
@@ -140,18 +139,17 @@ def get_trend_start_time(df):
             return df.index[i+1] if i+1 < len(df) else df.index[i]
     return df.index[0]
 
-# --- 🧠 HIERARCHY LOGIC V6 (Sequence Enforcement) ---
+# --- 🧠 HIERARCHY LOGIC V7 ---
 def analyze_hierarchy(df_setup, df_filter, df_trigger, setup_name, filter_name, trigger_name):
     if df_setup is None or df_filter is None or df_trigger is None:
         return "N/A", "Loading...", "#37474F"
 
-    # 1. SETUP PHASE: Start of Parent Trend
+    # 1. SETUP PHASE
     setup_state = df_setup['State'].iloc[-1]
     setup_dir = "BUY" if setup_state == "BULLISH" else "SELL"
     setup_start = get_trend_start_time(df_setup)
     
-    # 2. VALID RETRACEMENT (VR) SEARCH
-    # We look for VR *only* after the setup started
+    # 2. VALID RETRACEMENT (VR)
     df_filter_slice = df_filter[df_filter.index >= setup_start].copy()
     
     if df_filter_slice.empty: 
@@ -160,37 +158,28 @@ def analyze_hierarchy(df_setup, df_filter, df_trigger, setup_name, filter_name, 
     vr_target_state = "BEARISH" if setup_state == "BULLISH" else "BULLISH"
     vr_candles = df_filter_slice[df_filter_slice['State'] == vr_target_state]
     
-    # CASE 1: No VR has happened yet
     if vr_candles.empty:
         return "⏳ WAITING VR", f"Setup: {setup_name} {setup_dir} | Type: {filter_name} PULLBACK | Status: Waiting for First VR", "#FF6D00"
 
-    # CASE 2: VR has happened (We have a start time)
     first_vr_time = vr_candles.index[0]
     
-    # 3. CURRENT STATE ANALYSIS
+    # 3. CONFIRMATION
     curr_filter_state = df_filter['State'].iloc[-1]
     curr_trigger_state = df_trigger['State'].iloc[-1]
     
-    # A. CHECK IF WE ARE CURRENTLY IN VR
+    # CASE A: VR Active (Red Candle)
     if curr_filter_state == vr_target_state:
-        # We are pulling back right now.
-        # Check Trigger for aggressive entry (HRCF)
+        # Check Trigger
         if curr_trigger_state == setup_state:
             return f"⚠️ HRCF {setup_dir}", f"Setup: {setup_name} {setup_dir} | Type: HRCF ({trigger_name}) | Status: {filter_name} in VR -> {trigger_name} Aligned", "#FF9100"
         else:
-            # Trigger is also against us -> Just a normal VR
             return f"💤 VR FORMED", f"Setup: {setup_name} {setup_dir} | Type: {filter_name} VR | Status: Valid Pullback Active (Wait for Break)", "#78909C"
 
-    # B. CHECK IF WE HAVE BROKEN OUT OF VR (LRCF)
+    # CASE B: CF Formed (Green Candle)
     elif curr_filter_state == setup_state:
-        # Ensure this break happened AFTER the VR started (Logic Check)
-        # (This is implicitly true because we found first_vr_time earlier)
-        
-        # Count how many times we aligned since VR started
         df_after_vr = df_filter_slice[df_filter_slice.index >= first_vr_time]
         df_after_vr['group'] = (df_after_vr['State'] != df_after_vr['State'].shift()).cumsum()
         cf_count = len(df_after_vr[df_after_vr['State'] == setup_state]['group'].unique())
-        
         tag = "(Origin)" if cf_count == 1 else f"(Re-Entry {cf_count})"
         return f"💎 LRCF {setup_dir}", f"Setup: {setup_name} {setup_dir} | Type: LRCF ({filter_name}) | Status: CF Formed {tag}", "#00C853"
         
@@ -214,20 +203,18 @@ def plot_candlestick(df, title, state):
     )
     return fig
 
-# --- 7. FILE-BASED ALERT SYSTEM (Updated Filter) ---
-HISTORY_FILE = "alert_state.json"
+# --- 7. ROBUST ALERT SYSTEM ---
+HISTORY_FILE = "alert_history.json"
 
 def get_history():
-    if not os.path.exists(HISTORY_FILE):
-        return {}
+    if not os.path.exists(HISTORY_FILE): return {}
     try:
-        with open(HISTORY_FILE, "r") as f:
+        with open(HISTORY_FILE, "r") as f: 
             return json.load(f)
     except: return {}
 
 def save_history(history):
-    with open(HISTORY_FILE, "w") as f:
-        json.dump(history, f)
+    with open(HISTORY_FILE, "w") as f: json.dump(history, f)
 
 def send_telegram_msg(message):
     if not enable_tg or not tg_token or not tg_chat_id: return
@@ -237,31 +224,38 @@ def send_telegram_msg(message):
 def check_and_alert(header, signal, desc):
     history = get_history()
     
-    # Icon Selection
+    # 1. Construct Message
     icon = "ℹ️"
     if "LRCF" in signal: icon = "💎"
     elif "HRCF" in signal: icon = "⚠️"
     elif "VR FORMED" in signal: icon = "💤"
     
     formatted_desc = desc.replace(" | ", "\n")
-    current_msg_body = f"{icon} **{header} SIGNAL**\n{formatted_desc}"
+    current_msg = f"{icon} **{header} SIGNAL**\n{formatted_desc}".strip()
     
-    last_msg_body = history.get(header, "")
+    # 2. Get Last Message (STRICT)
+    last_msg = history.get(header, "").strip()
     
-    if current_msg_body != last_msg_body:
-        history[header] = current_msg_body
+    # 3. DEBUG: Show user what is happening
+    st.sidebar.text(f"[{header}]")
+    if current_msg == last_msg:
+        st.sidebar.caption(f"Status: EQUAL (No Alert)")
+    else:
+        st.sidebar.caption(f"Status: CHANGED (Sending...)")
+
+    # 4. Compare
+    if current_msg != last_msg:
+        history[header] = current_msg
         save_history(history)
         
-        # ALERT CONDITIONS:
-        # 1. Low Risk CF
-        # 2. High Risk CF
-        # 3. VR Formed (Pullback Started)
+        # 5. Send only actionable
         if "LRCF" in signal or "HRCF" in signal or "VR FORMED" in signal:
-            final_msg = f"{current_msg_body}\n🔥 CHECK CHART"
+            final_msg = f"{current_msg}\n🔥 CHECK CHART"
             send_telegram_msg(final_msg)
 
 # --- 8. MAIN EXECUTION ---
-st.title(f"🏆 BONKER V6.0: SEQUENCE LOGIC")
+st.title(f"🏆 BONKER V7.0: DEBUG MEMORY ({symbol})")
+st.sidebar.subheader("💾 System Logs")
 
 tabs = st.tabs(["Weekly", "Daily", "H4", "H1", "M30"])
 
