@@ -9,7 +9,7 @@ import requests
 
 # --- 1. CONFIGURATION ---
 warnings.filterwarnings("ignore")
-st.set_page_config(page_title="Bonker V2.8 (Custom Alert)", layout="wide", page_icon="🏆")
+st.set_page_config(page_title="Bonker V2.9 (Fixed)", layout="wide", page_icon="🏆")
 
 # --- 🔐 KEYPASS SYSTEM ---
 def check_password():
@@ -54,15 +54,21 @@ st.markdown("""
 
 # --- 3. SIDEBAR SETTINGS ---
 st.sidebar.header("⚙️ Master Settings")
+
+# --- 🟢 HARDCODED CREDENTIALS (EDIT HERE) ---
+# Replace these strings with your actual ID and Token to save them permanently
+DEFAULT_BOT_TOKEN = "8118812610:AAGhl19dpEq3DSMkmIHOGon3rF4Hg-fJxws"   # e.g. "123456:ABC-DEF..."
+DEFAULT_CHAT_ID = "968038923"     # e.g. "968038923"
+
 symbol = st.sidebar.text_input("Symbol", value="GC=F") 
-refresh_rate = st.sidebar.slider("Refresh Speed (s)", 5, 300, 6)
+refresh_rate = st.sidebar.slider("Refresh Speed (s)", 5, 300, 5)
 sensitivity = st.sidebar.number_input("Structure Sensitivity", min_value=1, max_value=10, value=2)
 
 # --- 🤖 TELEGRAM SETTINGS ---
 st.sidebar.markdown("---")
 st.sidebar.header("📱 Telegram Alerts")
-tg_token = st.sidebar.text_input("Bot Token", type="password")
-tg_chat_id = st.sidebar.text_input("Chat ID")
+tg_token = st.sidebar.text_input("Bot Token", value=DEFAULT_BOT_TOKEN, type="password")
+tg_chat_id = st.sidebar.text_input("Chat ID", value=DEFAULT_CHAT_ID)
 enable_tg = st.sidebar.checkbox("Enable Notifications", value=False)
 
 if st.sidebar.button("🔒 LOCK SYSTEM"):
@@ -190,64 +196,24 @@ def send_telegram_msg(message):
 if "alert_state" not in st.session_state: st.session_state.alert_state = {}
 
 def check_and_alert_custom(header_name, parent_tf_name, parent_state, main_sig, detail_sig):
-    """
-    Constructs the message exactly as requested:
-    "M30 is Sell, VR is active, waiting CF"
-    "M30 is Sell, CF form, Entry now"
-    """
-    
-    # Create unique signature
     current_signature = f"{header_name}|{parent_state}|{main_sig}|{detail_sig}"
     last_signature = st.session_state.alert_state.get(header_name, None)
     
     if current_signature != last_signature:
         st.session_state.alert_state[header_name] = current_signature
         
-        # --- MESSAGE CONSTRUCTION ---
         trend_dir = "Buy" if "BULLISH" in parent_state else "Sell"
         
-        # Logic 1: Entry Signal
         if "FRESH" in main_sig or "ENTRY" in main_sig:
-             # Emoji for Entry
-            msg = (
-                f"💎 **{header_name} UPDATE**\n"
-                f"{parent_tf_name} is {trend_dir}.\n"
-                f"CF Formed.\n"
-                f"🔥 ENTRY NOW"
-            )
-            
-        # Logic 2: Waiting for CF (VR Active)
-        elif "Active VR" in detail_sig or "Pullback Active" in detail_sig:
-            msg = (
-                f"⏳ **{header_name} UPDATE**\n"
-                f"{parent_tf_name} is {trend_dir}.\n"
-                f"VR is Active.\n"
-                f"Waiting CF."
-            )
-
-        # Logic 3: Waiting for VR (Trend just started)
-        elif "WAITING VR" in main_sig:
-             msg = (
-                f"💤 **{header_name} UPDATE**\n"
-                f"{parent_tf_name} is {trend_dir}.\n"
-                f"Waiting for VR (Pullback)."
-            )
-            
-        # Logic 4: Continuation
+            msg = f"💎 **{header_name} UPDATE**\n{parent_tf_name} is {trend_dir}.\nCF Formed.\n🔥 ENTRY NOW"
+        elif "Active VR" in detail_sig or "Pullback Active" in detail_sig or "Pullback Active" in main_sig:
+            msg = f"⏳ **{header_name} UPDATE**\n{parent_tf_name} is {trend_dir}.\nVR is Active.\nWaiting CF."
+        elif "WAITING VR" in main_sig or "WAITING H1 PULLBACK" in main_sig:
+             msg = f"💤 **{header_name} UPDATE**\n{parent_tf_name} is {trend_dir}.\nWaiting for VR (Pullback)."
         elif "CONTINUATION" in main_sig:
-             msg = (
-                f"🚀 **{header_name} UPDATE**\n"
-                f"{parent_tf_name} is {trend_dir}.\n"
-                f"Trend Continuing (Late)."
-            )
-            
+             msg = f"🚀 **{header_name} UPDATE**\n{parent_tf_name} is {trend_dir}.\nTrend Continuing (Late)."
         else:
-            # Fallback for weird states
-            msg = (
-                f"ℹ️ **{header_name} UPDATE**\n"
-                f"{parent_tf_name} is {trend_dir}.\n"
-                f"Status: {main_sig}"
-            )
+            msg = f"ℹ️ **{header_name} UPDATE**\n{parent_tf_name} is {trend_dir}.\nStatus: {main_sig}"
 
         send_telegram_msg(msg)
 
@@ -255,7 +221,7 @@ def check_and_alert_custom(header_name, parent_tf_name, parent_state, main_sig, 
 st.title(f"🏆 BONKER TRADING SYSTEM: {symbol}")
 
 tab_swing, tab_intraday, tab_normal, tab_scalp, tab_hyper = st.tabs([
-    "📊 Daily", "🎯 H4-M30", "🔹 Normal", "⚡ H1-M15", "⚡ M30-M5"
+    "📊 Daily", "🎯 H4-M30", "🔹 Normal (H4-H1)", "⚡ H1-M15", "⚡ M30-M5"
 ])
 
 # Layout Setup
@@ -311,22 +277,47 @@ try:
                 if s_m30 == "BEARISH": sig_cas = "🚀 SWING SELL"; bg_cas = "#D50000"; detail_cas = "Full Alignment"
                 else: sig_cas = "⏳ WAITING ENTRY"; bg_cas = "#FF6D00"; detail_cas = "Active VR (M30 Retrace)"
             
-            # ALERT SWING
             check_and_alert_custom("SWING (Daily)", "Daily", s_d, sig_cas, detail_cas)
 
             # --- LOGIC B: RICH SETUP (H4-M30) ---
             sig_intra, vr_status_intra, bg_intra = analyze_strict_cycle(df_h4, df_m30, s_h4, "M30 ENTRY")
-            # ALERT RICH
             check_and_alert_custom("H4-M30", "H4", s_h4, sig_intra, vr_status_intra)
 
-            # --- LOGIC C: SCALPER (H1-M15) ---
+            # --- LOGIC C: NORMAL SEQUENCE (H4-H1-M30) ---
+            # RESTORED LOGIC
+            sig_norm = "WAITING"
+            bg_norm = "#37474F"
+            norm_note = "Scanning..."
+            
+            if s_h4 == "BULLISH":
+                if s_h1 == "BEARISH": 
+                    h1_start = get_trend_start_time(df_h1)
+                    count, active = count_signals_since(df_m30, h1_start, "BULLISH")
+                    norm_note = f"H1 Pullback Active ({count} M30 Cycles)"
+                    if count == 0: sig_norm = "⏳ WAITING M30 ENTRY"; bg_norm = "#FF6D00" 
+                    elif count == 1 and active: sig_norm = "🎯 FRESH BUY (Origin)"; bg_norm = "#00C853"
+                    elif count >= 1 and not active: sig_norm = "⏳ PULLBACK ACTIVE"; bg_norm = "#37474F"
+                    else: sig_norm = "⚠️ CYCLE FINISHED"; bg_norm = "#455A64"; norm_note = "Cycle complete."
+                else: sig_norm = "⏳ WAITING H1 PULLBACK"; norm_note = "H1 is Bullish (No Discount)"
+            elif s_h4 == "BEARISH":
+                if s_h1 == "BULLISH":
+                    h1_start = get_trend_start_time(df_h1)
+                    count, active = count_signals_since(df_m30, h1_start, "BEARISH")
+                    norm_note = f"H1 Pullback Active ({count} M30 Cycles)"
+                    if count == 0: sig_norm = "⏳ WAITING M30 ENTRY"; bg_norm = "#FF6D00"
+                    elif count == 1 and active: sig_norm = "🎯 FRESH SELL (Origin)"; bg_norm = "#D50000"
+                    elif count >= 1 and not active: sig_norm = "⏳ PULLBACK ACTIVE"; bg_norm = "#37474F"
+                    else: sig_norm = "⚠️ CYCLE FINISHED"; bg_norm = "#455A64"; norm_note = "Cycle complete."
+                else: sig_norm = "⏳ WAITING H1 PULLBACK"; norm_note = "H1 is Bearish (No Discount)"
+            
+            check_and_alert_custom("NORMAL SEQ (H4-H1)", "H4", s_h4, sig_norm, norm_note)
+
+            # --- LOGIC D: SCALPER (H1-M15) ---
             sig_s, vr_status_s, bg_s = analyze_strict_cycle(df_h1, df_m15, s_h1, "M15 ENTRY")
-            # ALERT SCALP
             check_and_alert_custom("H1-M15", "H1", s_h1, sig_s, vr_status_s)
 
-            # --- LOGIC D: HYPER SCALP (M30-M5) ---
+            # --- LOGIC E: HYPER SCALP (M30-M5) ---
             sig_h, vr_status_h, bg_h = analyze_strict_cycle(df_m30, df_m5, s_m30, "M5 ENTRY")
-            # ALERT HYPER
             check_and_alert_custom("M30-M5", "M30", s_m30, sig_h, vr_status_h)
 
             # --- RENDER UI ---
@@ -352,7 +343,18 @@ try:
                 with ig1: st.plotly_chart(plot_smart_chart(df_h4, "H4 Trend", s_h4), width="stretch")
                 with ig2: st.plotly_chart(plot_smart_chart(df_m30, "M30 Sequence", s_m30, tag=vr_status_intra), width="stretch")
 
-            # 3. Scalp
+            # 3. Normal (RESTORED RENDER)
+            with n_banner: st.markdown(f"<div style='background:{bg_norm};padding:10px;border-radius:10px;text-align:center;margin-bottom:10px;'><h2 style='color:white;margin:0;'>{sig_norm}</h2></div>", unsafe_allow_html=True)
+            with col_n_h4: st.markdown(f'<div class="metric-box {s_h4.lower()}">1. H4 TREND<br>{s_h4}</div>', unsafe_allow_html=True)
+            with col_n_h1: st.markdown(f'<div class="metric-box {s_h1.lower()}">2. H1 PULLBACK<br>{s_h1}</div>', unsafe_allow_html=True)
+            with col_n_m30: st.markdown(f'<div class="metric-box {s_m30.lower()}">3. M30 ENTRY<br>{s_m30}<br><span style="font-size:12px">{norm_note}</span></div>', unsafe_allow_html=True)
+            with n_charts:
+                ng1, ng2, ng3 = st.columns(3)
+                with ng1: st.plotly_chart(plot_smart_chart(df_h4, "Step 1: H4 Trend", s_h4), width="stretch")
+                with ng2: st.plotly_chart(plot_smart_chart(df_h1, "Step 2: H1 VR", s_h1), width="stretch")
+                with ng3: st.plotly_chart(plot_smart_chart(df_m30, "Step 3: M30 CF", s_m30), width="stretch")
+
+            # 4. Scalp
             with s_banner: st.markdown(f"<div style='background:{bg_s};padding:10px;border-radius:10px;text-align:center;margin-bottom:10px;'><h2 style='color:white;margin:0;'>{sig_s}</h2></div>", unsafe_allow_html=True)
             with col_s_h1: st.markdown(f'<div class="metric-box {s_h1.lower()}">H1 TREND<br>{s_h1}</div>', unsafe_allow_html=True)
             with col_s_m15: st.markdown(f'<div class="metric-box {s_m15.lower()}">M15 ENTRY<br>{s_m15}<br><span style="font-size:12px">{vr_status_s}</span></div>', unsafe_allow_html=True)
@@ -361,7 +363,7 @@ try:
                 with sg1: st.plotly_chart(plot_smart_chart(df_h1, "H1 Trend", s_h1), width="stretch")
                 with sg2: st.plotly_chart(plot_smart_chart(df_m15, "M15 Sequence", s_m15, tag=vr_status_s), width="stretch")
 
-            # 4. Hyper
+            # 5. Hyper
             with h_banner: st.markdown(f"<div style='background:{bg_h};padding:10px;border-radius:10px;text-align:center;margin-bottom:10px;'><h2 style='color:white;margin:0;'>{sig_h}</h2></div>", unsafe_allow_html=True)
             with col_h_m30: st.markdown(f'<div class="metric-box {s_m30.lower()}">M30 TREND<br>{s_m30}</div>', unsafe_allow_html=True)
             with col_h_m5: st.markdown(f'<div class="metric-box {s_m5.lower()}">M5 ENTRY<br>{s_m5}<br><span style="font-size:12px">{vr_status_h}</span></div>', unsafe_allow_html=True)
