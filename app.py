@@ -5,10 +5,12 @@ import plotly.graph_objects as go
 import time
 import warnings
 import requests
+import json
+import os
 
 # --- 1. CONFIGURATION ---
 warnings.filterwarnings("ignore")
-st.set_page_config(page_title="Bonker V3", layout="wide", page_icon="🏆")
+st.set_page_config(page_title="Bonker V5.5 (File Memory)", layout="wide", page_icon="🏆")
 
 # --- 🔐 KEYPASS SYSTEM ---
 def check_password():
@@ -138,7 +140,7 @@ def get_trend_start_time(df):
             return df.index[i+1] if i+1 < len(df) else df.index[i]
     return df.index[0]
 
-# --- 🧠 HIERARCHY LOGIC: LRCF / HRCF ---
+# --- 🧠 HIERARCHY LOGIC ---
 def analyze_hierarchy(df_setup, df_filter, df_trigger, setup_name, filter_name, trigger_name):
     if df_setup is None or df_filter is None or df_trigger is None:
         return "N/A", "Loading...", "#37474F"
@@ -157,7 +159,6 @@ def analyze_hierarchy(df_setup, df_filter, df_trigger, setup_name, filter_name, 
     vr_target_state = "BEARISH" if setup_state == "BULLISH" else "BULLISH"
     vr_candles = df_filter_slice[df_filter_slice['State'] == vr_target_state]
     
-    # No VR yet (Filter never pulled back)
     if vr_candles.empty:
         return "⏳ WAITING VR", f"Setup: {setup_name} {setup_dir} | Type: PULLBACK | Status: Waiting for VR", "#FF6D00"
 
@@ -180,7 +181,6 @@ def analyze_hierarchy(df_setup, df_filter, df_trigger, setup_name, filter_name, 
     elif curr_trigger_state == setup_state:
         return f"⚠️ HRCF {setup_dir}", f"Setup: {setup_name} {setup_dir} | Type: HRCF ({trigger_name}) | Status: CF Formed (Aggressive)", "#FF9100"
 
-    # C. WAITING CF
     else:
         return "💤 WAITING CF", f"Setup: {setup_name} {setup_dir} | Type: {filter_name} VR | Status: VR Formed (Waiting Break)", "#37474F"
 
@@ -202,38 +202,50 @@ def plot_candlestick(df, title, state):
     )
     return fig
 
-# --- 7. ALERTS (ANTI-SPAM FIX) ---
+# --- 7. FILE-BASED ALERT SYSTEM (NO SPAM) ---
+HISTORY_FILE = "alert_state.json"
+
+def get_history():
+    if not os.path.exists(HISTORY_FILE):
+        return {}
+    try:
+        with open(HISTORY_FILE, "r") as f:
+            return json.load(f)
+    except: return {}
+
+def save_history(history):
+    with open(HISTORY_FILE, "w") as f:
+        json.dump(history, f)
+
 def send_telegram_msg(message):
     if not enable_tg or not tg_token or not tg_chat_id: return
     try: requests.post(f"https://api.telegram.org/bot{tg_token}/sendMessage", data={"chat_id": tg_chat_id, "text": message}, timeout=5)
     except: pass
 
-# Init Session State for History
-if "alert_history" not in st.session_state: st.session_state.alert_history = {}
-
 def check_and_alert(header, signal, desc):
-    # 1. Build the exact potential message body
+    # 1. Load History from Disk
+    history = get_history()
+    
+    # 2. Build Message
     icon = "💎" if "LRCF" in signal else "⚠️"
     formatted_desc = desc.replace(" | ", "\n")
-    
-    # This is the string we compare
     current_msg_body = f"{icon} **{header} SIGNAL**\n{formatted_desc}"
     
-    # 2. Get the last sent message for this Header (e.g., Weekly)
-    last_msg_body = st.session_state.alert_history.get(header, None)
+    # 3. Compare with saved history for this timeframe
+    last_msg_body = history.get(header, "")
     
-    # 3. STRICT COMPARISON: If text is exactly the same, DO NOTHING.
     if current_msg_body != last_msg_body:
-        # Update history
-        st.session_state.alert_history[header] = current_msg_body
+        # Update Disk
+        history[header] = current_msg_body
+        save_history(history)
         
-        # Only send if it's an actionable signal (LRCF or HRCF)
+        # Send
         if "LRCF" in signal or "HRCF" in signal:
             final_msg = f"{current_msg_body}\n🔥 CHECK CHART"
             send_telegram_msg(final_msg)
 
 # --- 8. MAIN EXECUTION ---
-st.title(f"🏆 BONKER V5.4: STABLE SYSTEM ({symbol})")
+st.title(f"🏆 BONKER Trading System")
 
 tabs = st.tabs(["Weekly", "Daily", "H4", "H1", "M30"])
 
