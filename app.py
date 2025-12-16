@@ -8,7 +8,7 @@ import requests
 
 # --- 1. CONFIGURATION ---
 warnings.filterwarnings("ignore")
-st.set_page_config(page_title="Bonker V5", layout="wide", page_icon="🏆")
+st.set_page_config(page_title="Bonker V5.1 (TZ Fix)", layout="wide", page_icon="🏆")
 
 # --- 🔐 KEYPASS SYSTEM ---
 def check_password():
@@ -53,7 +53,7 @@ except (FileNotFoundError, KeyError):
     DEFAULT_CHAT_ID = ""
     DEFAULT_ENABLE = False
 
-symbol = st.sidebar.text_input("Symbol", value="GC=F") # Changed default to Gold for Forex context
+symbol = st.sidebar.text_input("Symbol", value="GC=F") 
 refresh_rate = st.sidebar.slider("Refresh Speed (s)", 5, 300, 5) 
 sensitivity = st.sidebar.number_input("Structure Sensitivity", min_value=1, max_value=10, value=2)
 
@@ -69,9 +69,22 @@ if st.sidebar.button("🔒 LOCK SYSTEM"):
 
 stop_btn = st.sidebar.button("🟥 STOP DATA ENGINE")
 
-# --- 4. ADVANCED DATA ENGINE ---
-def flatten_columns(df):
-    if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+# --- 4. ADVANCED DATA ENGINE (FIXED) ---
+def clean_data(df):
+    """
+    1. Flattens MultiIndex columns (Price, Ticker).
+    2. STRIPS Timezone info to prevent 'TZ-aware vs TZ-naive' crash.
+    """
+    if df is None or df.empty: return None
+    
+    # Flatten columns
+    if isinstance(df.columns, pd.MultiIndex): 
+        df.columns = df.columns.get_level_values(0)
+        
+    # FIX: Remove Timezone Information (Force Naive)
+    if df.index.tz is not None:
+        df.index = df.index.tz_localize(None)
+        
     return df
 
 def fetch_hierarchical_data(symbol):
@@ -79,15 +92,14 @@ def fetch_hierarchical_data(symbol):
         # 1. LONG DATA (for Weekly/Daily) - 2 Years
         df_long = yf.download(symbol, period="2y", interval="1d", progress=False, auto_adjust=False)
         
-        # 2. MID DATA (for H4/H1) - 60 Days of 1h data (Max available for 1h is usually 730 days, but 60 is faster)
+        # 2. MID DATA (for H4/H1) - 60 Days of 1h data
         df_mid = yf.download(symbol, period="60d", interval="1h", progress=False, auto_adjust=False)
         
         # 3. SHORT DATA (for M30/M15/M5) - 5 Days of 5m data
         df_short = yf.download(symbol, period="5d", interval="5m", progress=False, auto_adjust=False)
 
-        if df_long.empty or df_mid.empty or df_short.empty: return None, None, None
-
-        return flatten_columns(df_long), flatten_columns(df_mid), flatten_columns(df_short)
+        # Clean and Fix Timezones immediately
+        return clean_data(df_long), clean_data(df_mid), clean_data(df_short)
     except Exception as e:
         print(e)
         return None, None, None
@@ -96,17 +108,10 @@ def resample_data(df, tf):
     if df is None or df.empty: return None
     agg = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}
     try:
-        # Weekly
         if tf == "1wk": return df.resample("W-FRI").agg(agg).dropna()
-        # Daily is native
-        # H4
         if tf == "4h": return df.resample("4h").agg(agg).dropna()
-        # H1 is native
-        # M30
         if tf == "30m": return df.resample("30min").agg(agg).dropna()
-        # M15
         if tf == "15m": return df.resample("15min").agg(agg).dropna()
-        # M5 is native
     except: return df 
     return df 
 
@@ -130,8 +135,6 @@ def calculate_structure(df, lookback):
         high = df['High'].iloc[i]
         low = df['Low'].iloc[i]
         
-        # Rolling high/low excluding current candle to prevent lookahead bias in backtest
-        # But for live signals, we use the completed candle values
         local_max = df['Rolling_Max'].iloc[i] if not pd.isna(df['Rolling_Max'].iloc[i]) else high
         local_min = df['Rolling_Min'].iloc[i] if not pd.isna(df['Rolling_Min'].iloc[i]) else low
         
@@ -157,6 +160,9 @@ def get_trend_start_time(df):
 
 # --- 🧠 HIERARCHY LOGIC: SETUP -> FILTER -> TRIGGER ---
 def analyze_hierarchy(df_setup, df_filter, df_trigger, setup_name, filter_name, trigger_name):
+    if df_setup is None or df_filter is None or df_trigger is None:
+        return "N/A", "Loading Data...", "#37474F"
+
     # 1. SETUP PHASE
     setup_state = df_setup['State'].iloc[-1]
     setup_start = get_trend_start_time(df_setup)
@@ -242,7 +248,7 @@ def check_and_alert(header, signal, desc):
             send_telegram_msg(msg)
 
 # --- 8. MAIN EXECUTION ---
-st.title(f"🏆 BONKER V5: MULTI-TIMEFRAME HIERARCHY ({symbol})")
+st.title(f"🏆 BONKER V5.1: MULTI-TIMEFRAME HIERARCHY ({symbol})")
 
 # DEFINE TABS
 tabs = st.tabs([
@@ -261,7 +267,7 @@ try:
         # Fetch Data Batches
         df_long_raw, df_mid_raw, df_short_raw = fetch_hierarchical_data(symbol)
         
-        if df_long_raw is not None and df_mid_raw is not None:
+        if df_long_raw is not None and df_mid_raw is not None and df_short_raw is not None:
             # --- PREPARE DATAFRAMES ---
             # Weekly / Daily
             df_w1, s_w1 = calculate_structure(resample_data(df_long_raw.copy(), "1wk"), sensitivity)
@@ -335,7 +341,7 @@ try:
             st.rerun()
 
         else:
-            st.error("❌ Data Fetch Error. Retrying...")
+            st.error("❌ Data Fetch Error (Retrying in 10s)...")
             time.sleep(10)
             st.rerun()
             
