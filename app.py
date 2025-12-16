@@ -9,7 +9,7 @@ import requests
 
 # --- 1. CONFIGURATION ---
 warnings.filterwarnings("ignore")
-st.set_page_config(page_title="Bonker V2.9 (Fixed)", layout="wide", page_icon="🏆")
+st.set_page_config(page_title="Bonker V3.0 (Secure)", layout="wide", page_icon="🏆")
 
 # --- 🔐 KEYPASS SYSTEM ---
 def check_password():
@@ -55,10 +55,17 @@ st.markdown("""
 # --- 3. SIDEBAR SETTINGS ---
 st.sidebar.header("⚙️ Master Settings")
 
-# --- 🟢 HARDCODED CREDENTIALS (EDIT HERE) ---
-# Replace these strings with your actual ID and Token to save them permanently
-DEFAULT_BOT_TOKEN = "8118812610:AAGhl19dpEq3DSMkmIHOGon3rF4Hg-fJxws"   # e.g. "123456:ABC-DEF..."
-DEFAULT_CHAT_ID = "968038923"     # e.g. "968038923"
+# --- 🟢 SECURE CREDENTIAL LOADING ---
+# This looks for secrets.toml (Local) or Secrets Dashboard (Cloud)
+try:
+    DEFAULT_BOT_TOKEN = st.secrets["telegram"]["bot_token"]
+    DEFAULT_CHAT_ID = st.secrets["telegram"]["chat_id"]
+    DEFAULT_ENABLE = True
+except (FileNotFoundError, KeyError):
+    # If no secrets found, leave blank
+    DEFAULT_BOT_TOKEN = ""
+    DEFAULT_CHAT_ID = ""
+    DEFAULT_ENABLE = False
 
 symbol = st.sidebar.text_input("Symbol", value="GC=F") 
 refresh_rate = st.sidebar.slider("Refresh Speed (s)", 5, 300, 5)
@@ -69,7 +76,7 @@ st.sidebar.markdown("---")
 st.sidebar.header("📱 Telegram Alerts")
 tg_token = st.sidebar.text_input("Bot Token", value=DEFAULT_BOT_TOKEN, type="password")
 tg_chat_id = st.sidebar.text_input("Chat ID", value=DEFAULT_CHAT_ID)
-enable_tg = st.sidebar.checkbox("Enable Notifications", value=False)
+enable_tg = st.sidebar.checkbox("Enable Notifications", value=DEFAULT_ENABLE)
 
 if st.sidebar.button("🔒 LOCK SYSTEM"):
     st.session_state.password_correct = False
@@ -196,6 +203,7 @@ def send_telegram_msg(message):
 if "alert_state" not in st.session_state: st.session_state.alert_state = {}
 
 def check_and_alert_custom(header_name, parent_tf_name, parent_state, main_sig, detail_sig):
+    # Unique signature to detect change
     current_signature = f"{header_name}|{parent_state}|{main_sig}|{detail_sig}"
     last_signature = st.session_state.alert_state.get(header_name, None)
     
@@ -204,6 +212,7 @@ def check_and_alert_custom(header_name, parent_tf_name, parent_state, main_sig, 
         
         trend_dir = "Buy" if "BULLISH" in parent_state else "Sell"
         
+        # --- Logic to match your requested format ---
         if "FRESH" in main_sig or "ENTRY" in main_sig:
             msg = f"💎 **{header_name} UPDATE**\n{parent_tf_name} is {trend_dir}.\nCF Formed.\n🔥 ENTRY NOW"
         elif "Active VR" in detail_sig or "Pullback Active" in detail_sig or "Pullback Active" in main_sig:
@@ -284,7 +293,6 @@ try:
             check_and_alert_custom("H4-M30", "H4", s_h4, sig_intra, vr_status_intra)
 
             # --- LOGIC C: NORMAL SEQUENCE (H4-H1-M30) ---
-            # RESTORED LOGIC
             sig_norm = "WAITING"
             bg_norm = "#37474F"
             norm_note = "Scanning..."
@@ -343,7 +351,7 @@ try:
                 with ig1: st.plotly_chart(plot_smart_chart(df_h4, "H4 Trend", s_h4), width="stretch")
                 with ig2: st.plotly_chart(plot_smart_chart(df_m30, "M30 Sequence", s_m30, tag=vr_status_intra), width="stretch")
 
-            # 3. Normal (RESTORED RENDER)
+            # 3. Normal
             with n_banner: st.markdown(f"<div style='background:{bg_norm};padding:10px;border-radius:10px;text-align:center;margin-bottom:10px;'><h2 style='color:white;margin:0;'>{sig_norm}</h2></div>", unsafe_allow_html=True)
             with col_n_h4: st.markdown(f'<div class="metric-box {s_h4.lower()}">1. H4 TREND<br>{s_h4}</div>', unsafe_allow_html=True)
             with col_n_h1: st.markdown(f'<div class="metric-box {s_h1.lower()}">2. H1 PULLBACK<br>{s_h1}</div>', unsafe_allow_html=True)
