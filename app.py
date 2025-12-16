@@ -5,15 +5,16 @@ import numpy as np
 import plotly.graph_objects as go
 import time
 import warnings
+import requests  # <--- NEW IMPORT
 
 # --- 1. CONFIGURATION ---
 warnings.filterwarnings("ignore")
-st.set_page_config(page_title="Bonker Trading System V2.6", layout="wide", page_icon="🏆")
+st.set_page_config(page_title="Bonker Trading System V2.7", layout="wide", page_icon="🏆")
 
 # --- 🔐 KEYPASS SYSTEM ---
 def check_password():
     """Returns `True` if the user had the correct password."""
-    correct_password = st.secrets["PASSWORD"]  
+    correct_password = st.secrets["PASSWORD"] 
 
     if "password_correct" not in st.session_state:
         st.session_state.password_correct = False
@@ -22,7 +23,6 @@ def check_password():
         return True
 
     st.markdown("<h1 style='text-align: center; color: #FFD700;'>🔒 SYSTEM LOCKED</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center;'>Please enter the access key to view the dashboard.</p>", unsafe_allow_html=True)
     
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
@@ -59,8 +59,15 @@ st.markdown("""
 st.sidebar.header("⚙️ Master Settings")
 symbol = st.sidebar.text_input("Symbol", value="GC=F") 
 st.sidebar.caption("Use **GC=F** (Futures) or **XAUUSD=X** (Spot).")
-refresh_rate = st.sidebar.slider("Refresh Speed (s)", 5, 60, 5)
+refresh_rate = st.sidebar.slider("Refresh Speed (s)", 10, 300, 30) # Increased min default to avoid spam logic checks
 sensitivity = st.sidebar.number_input("Structure Sensitivity", min_value=1, max_value=10, value=2)
+
+# --- 🤖 TELEGRAM SETTINGS (NEW) ---
+st.sidebar.markdown("---")
+st.sidebar.header("📱 Telegram Alerts")
+tg_token = st.sidebar.text_input("Bot Token", type="password", help="Get from @BotFather")
+tg_chat_id = st.sidebar.text_input("Chat ID", help="Get from @userinfobot")
+enable_tg = st.sidebar.checkbox("Enable Notifications", value=False)
 
 if st.sidebar.button("🔒 LOCK SYSTEM"):
     st.session_state.password_correct = False
@@ -143,68 +150,35 @@ def count_signals_since(df_target, start_time, target_state):
     return count, is_currently_active
 
 def analyze_strict_cycle(df_trend, df_entry, trend_state, type_label="ENTRY"):
-    """
-    Dynamic Cycle Logic:
-    1. Finds the Start of the Parent Trend.
-    2. Finds the MOST RECENT Child Pullback (VR) within that trend.
-    3. Resets cycle logic based on that latest pullback.
-    """
-    # 1. Determine when the Parent Trend started
     trend_start = get_trend_start_time(df_trend)
-    
-    # 2. Slice Entry data: Look only at what happened AFTER Parent started trending
     df_slice = df_entry[df_entry.index >= trend_start].copy()
     
     if df_slice.empty: return f"WAITING", "No Data", "#37474F"
 
-    # 3. Identify VRs (Child Blocks of Opposite State)
     opp_state = "BEARISH" if trend_state == "BULLISH" else "BULLISH"
-    
-    # Assign a unique ID to each block of consecutive states
     df_slice['group'] = (df_slice['State'] != df_slice['State'].shift()).cumsum()
-    
-    # Find all groups that are VRs (Opposite State)
     vr_groups = df_slice[df_slice['State'] == opp_state]['group'].unique()
     
-    # --- SCENARIO 1: No Pullback yet ---
     if len(vr_groups) == 0:
         return f"⏳ WAITING VR", f"Parent Trending -> Wait {type_label} Pullback", "#FF6D00"
     
-    # --- SCENARIO 2: Analyze the LATEST VR ---
-    # We look at the very last VR group index. 
-    # This allows the system to reset if a new pullback happens.
     last_vr_id = vr_groups[-1]
-    
-    # Get start index of this Latest VR
     last_vr_start_idx = df_slice[df_slice['group'] == last_vr_id].index[0]
     df_cycle = df_slice[df_slice.index >= last_vr_start_idx].copy()
     
-    # Check current state of Child
     current_child_state = df_cycle['State'].iloc[-1]
-    
-    # Count how many times Child flipped back to Trend State *AFTER* the Latest VR started
     conf_groups = df_cycle[df_cycle['State'] == trend_state]['group'].unique()
     count_cf = len(conf_groups)
     
-    # --- LOGIC GATES ---
-    
     if current_child_state == opp_state:
-        # We are currently IN a Pullback (VR)
-        # It doesn't matter if it's the 1st or 5th VR, if we are Red, we wait for Green.
         return f"⏳ WAITING {type_label}", "Active VR (Loading...)", "#FF6D00"
         
     elif count_cf == 1:
-        # We have broken out of the Latest VR exactly once AND we are currently in Trend State
         if current_child_state == trend_state:
             return f"💎 {type_label} (Fresh)", "Fresh Break of Latest VR", "#00C853"
         else:
-            # Should not happen given the 'current_child_state == opp_state' check above,
-            # but safe fallback.
             return f"⏳ WAITING {type_label}", "Pullback Active", "#FF6D00"
-            
     else:
-        # count_cf > 1
-        # We are deep into the push after the latest VR
         if current_child_state == trend_state:
             return f"🚀 CONTINUATION", f"Push #{count_cf} after VR", "#558B2F"
         else:
@@ -230,16 +204,64 @@ def plot_smart_chart(df, title, state, tag=None):
     )
     return fig
 
-# --- 7. MAIN EXECUTION ---
+# --- 7. TELEGRAM FUNCTIONALITY (NEW) ---
+def send_telegram_msg(message):
+    if not enable_tg or not tg_token or not tg_chat_id:
+        return
+    
+    url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
+    try:
+        data = {"chat_id": tg_chat_id, "text": message}
+        requests.post(url, data=data, timeout=5)
+    except Exception as e:
+        print(f"Telegram Error: {e}")
+
+# State tracker for alerts to avoid spamming
+if "alert_state" not in st.session_state:
+    st.session_state.alert_state = {}
+
+def check_and_alert(strategy_name, main_status, sub_status):
+    """
+    Checks if the combined status has changed. 
+    If changed, updates state and sends Telegram msg.
+    """
+    # Create a unique signature for the current state
+    current_signature = f"{main_status} || {sub_status}"
+    
+    # Retrieve last known signature
+    last_signature = st.session_state.alert_state.get(strategy_name, None)
+    
+    # If it's different, update and alert
+    if current_signature != last_signature:
+        st.session_state.alert_state[strategy_name] = current_signature
+        
+        # Only send alert if it's not the very first run (optional, removes startup spam)
+        # But for now we send on change.
+        
+        # Format the message nicely
+        emoji = "🔔"
+        if "ENTRY" in main_status or "FRESH" in main_status: emoji = "💎"
+        if "CONTINUATION" in main_status: emoji = "🚀"
+        if "WAITING VR" in main_status: emoji = "⏳"
+        
+        msg = (
+            f"{emoji} **{strategy_name} UPDATE**\n"
+            f"Symbol: {symbol}\n"
+            f"Status: {main_status}\n"
+            f"Detail: {sub_status}"
+        )
+        send_telegram_msg(msg)
+
+# --- 8. MAIN EXECUTION ---
 st.title(f"🏆 BONKER TRADING SYSTEM: {symbol}")
 
 # --- TABS ---
 tab_swing, tab_intraday, tab_normal, tab_scalp, tab_hyper = st.tabs([
-    "📊 Daily Deploy (D-H4-H1-M30)", 
-    "🎯 Rich Setup (H4-M30)", 
-    "🔹 Normal Sequence (H4-H1-M30)", 
-    "⚡ Scalping Sequence (H1-M15)",
-    "⚡ Hyper Scalp (M30-M5)"
+    "📊 Daily Deploy", 
+    "🎯 Rich Setup", 
+    "🔹 Normal Sequence", 
+    "⚡ Scalping",
+    "⚡ Hyper Scalp"
 ])
 
 # Layout Containers
@@ -288,18 +310,37 @@ try:
             # --- LOGIC A: SWING ---
             sig_cas = "WAITING"
             bg_cas = "#37474F"
+            detail_cas = "Monitor M30 Breakout"
             if s_d == "BULLISH" and s_h4 == "BULLISH" and s_h1 == "BULLISH":
-                if s_m30 == "BULLISH": sig_cas = "🚀 SWING BUY (Full Alignment)"; bg_cas = "#00C853"
-                else: sig_cas = "⏳ TREND UP - Waiting for M30 Breakout"; bg_cas = "#FF6D00"
+                if s_m30 == "BULLISH": 
+                    sig_cas = "🚀 SWING BUY (Full Alignment)" 
+                    bg_cas = "#00C853"
+                    detail_cas = "All TFs Aligned Bullish"
+                else: 
+                    sig_cas = "⏳ TREND UP - Waiting M30" 
+                    bg_cas = "#FF6D00"
+                    detail_cas = "M30 is Bearish (Retracement)"
             elif s_d == "BEARISH" and s_h4 == "BEARISH" and s_h1 == "BEARISH":
-                if s_m30 == "BEARISH": sig_cas = "🚀 SWING SELL (Full Alignment)"; bg_cas = "#D50000"
-                else: sig_cas = "⏳ TREND DOWN - Waiting for M30 Breakout"; bg_cas = "#FF6D00"
+                if s_m30 == "BEARISH": 
+                    sig_cas = "🚀 SWING SELL (Full Alignment)" 
+                    bg_cas = "#D50000"
+                    detail_cas = "All TFs Aligned Bearish"
+                else: 
+                    sig_cas = "⏳ TREND DOWN - Waiting M30" 
+                    bg_cas = "#FF6D00"
+                    detail_cas = "M30 is Bullish (Retracement)"
+            
+            # CHECK ALERT SWING
+            check_and_alert("SWING (Daily)", sig_cas, detail_cas)
 
             # --- LOGIC B: INTRADAY (RICH SETUP) ---
             sig_intra, vr_status_text, bg_intra = analyze_strict_cycle(df_h4, df_m30, s_h4, "M30 ENTRY")
+            
+            # CHECK ALERT INTRADAY
+            # This captures VR formation because 'vr_status_text' changes from "Parent Trending" to "Active VR"
+            check_and_alert("RICH SETUP (Intraday)", sig_intra, vr_status_text)
 
             # --- LOGIC NEW: NORMAL SEQUENCE (H4 -> H1 -> M30) ---
-            # Kept as requested previously (Cycle on H1)
             sig_norm = "WAITING"
             bg_norm = "#37474F"
             norm_note = "Scanning..."
@@ -324,12 +365,17 @@ try:
                     elif count >= 1 and not active: sig_norm = "⏳ PULLBACK IN PROGRESS"; bg_norm = "#37474F"
                     else: sig_norm = "⚠️ CYCLE FINISHED (Late)"; bg_norm = "#455A64"; norm_note = "Cycle complete."
                 else: sig_norm = "⏳ WAITING H1 PULLBACK"; norm_note = "H1 is Bearish (No Discount)"
+            
+            # CHECK ALERT NORMAL
+            check_and_alert("NORMAL SEQ (H4-H1-M30)", sig_norm, norm_note)
 
             # --- LOGIC C: SCALPER (H1 -> M15 Strict) ---
             sig_s, s_vr_text, bg_s = analyze_strict_cycle(df_h1, df_m15, s_h1, "M15 ENTRY")
+            check_and_alert("SCALPER (H1-M15)", sig_s, s_vr_text)
 
             # --- LOGIC D: HYPER SCALP (M30 -> M5 Strict) ---
             sig_h, h_vr_text, bg_h = analyze_strict_cycle(df_m30, df_m5, s_m30, "M5 ENTRY")
+            check_and_alert("HYPER SCALP (M30-M5)", sig_h, h_vr_text)
 
             # --- RENDER SWING ---
             with c_banner: st.markdown(f"<div style='background:{bg_cas};padding:10px;border-radius:10px;text-align:center;margin-bottom:10px;'><h2 style='color:white;margin:0;'>{sig_cas}</h2></div>", unsafe_allow_html=True)
@@ -388,4 +434,7 @@ try:
             st.error(f"❌ Data Error for {symbol}. Try 'GC=F' or 'GLD'.")
             time.sleep(10)
             st.rerun()
-except: pass
+except KeyboardInterrupt:
+    st.write("Stopped")
+except Exception as e:
+    st.error(f"System Error: {e}")
