@@ -53,8 +53,8 @@ except (FileNotFoundError, KeyError):
     DEFAULT_CHAT_ID = ""
     DEFAULT_ENABLE = False
 
-symbol = st.sidebar.text_input("Symbol", value="XAUUSD=X") # Changed default to Gold for Forex context
-refresh_rate = st.sidebar.slider("Refresh Speed (s)", 5, 300, 10) 
+symbol = st.sidebar.text_input("Symbol", value="GC=F") # Changed default to Gold for Forex context
+refresh_rate = st.sidebar.slider("Refresh Speed (s)", 5, 300, 5) 
 sensitivity = st.sidebar.number_input("Structure Sensitivity", min_value=1, max_value=10, value=2)
 
 st.sidebar.markdown("---")
