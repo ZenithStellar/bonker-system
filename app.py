@@ -59,7 +59,7 @@ st.markdown("""
 st.sidebar.header("⚙️ Master Settings")
 symbol = st.sidebar.text_input("Symbol", value="GC=F") 
 st.sidebar.caption("Use **GC=F** (Futures) or **XAUUSD=X** (Spot).")
-refresh_rate = st.sidebar.slider("Refresh Speed (s)", 10, 300, 30) # Increased min default to avoid spam logic checks
+refresh_rate = st.sidebar.slider("Refresh Speed (s)", 5, 300, 10) # Increased min default to avoid spam logic checks
 sensitivity = st.sidebar.number_input("Structure Sensitivity", min_value=1, max_value=10, value=2)
 
 # --- 🤖 TELEGRAM SETTINGS (NEW) ---
