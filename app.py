@@ -8,7 +8,7 @@ import requests
 
 # --- 1. CONFIGURATION ---
 warnings.filterwarnings("ignore")
-st.set_page_config(page_title="Bonker V5.1 (TZ Fix)", layout="wide", page_icon="🏆")
+st.set_page_config(page_title="Bonker V5.2", layout="wide", page_icon="🏆")
 
 # --- 🔐 KEYPASS SYSTEM ---
 def check_password():
@@ -54,7 +54,7 @@ except (FileNotFoundError, KeyError):
     DEFAULT_ENABLE = False
 
 symbol = st.sidebar.text_input("Symbol", value="GC=F") 
-refresh_rate = st.sidebar.slider("Refresh Speed (s)", 5, 300, 5) 
+refresh_rate = st.sidebar.slider("Refresh Speed (s)", 5, 300, 10) 
 sensitivity = st.sidebar.number_input("Structure Sensitivity", min_value=1, max_value=10, value=2)
 
 st.sidebar.markdown("---")
@@ -69,36 +69,18 @@ if st.sidebar.button("🔒 LOCK SYSTEM"):
 
 stop_btn = st.sidebar.button("🟥 STOP DATA ENGINE")
 
-# --- 4. ADVANCED DATA ENGINE (FIXED) ---
+# --- 4. DATA ENGINE ---
 def clean_data(df):
-    """
-    1. Flattens MultiIndex columns (Price, Ticker).
-    2. STRIPS Timezone info to prevent 'TZ-aware vs TZ-naive' crash.
-    """
     if df is None or df.empty: return None
-    
-    # Flatten columns
-    if isinstance(df.columns, pd.MultiIndex): 
-        df.columns = df.columns.get_level_values(0)
-        
-    # FIX: Remove Timezone Information (Force Naive)
-    if df.index.tz is not None:
-        df.index = df.index.tz_localize(None)
-        
+    if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+    if df.index.tz is not None: df.index = df.index.tz_localize(None)
     return df
 
 def fetch_hierarchical_data(symbol):
     try:
-        # 1. LONG DATA (for Weekly/Daily) - 2 Years
         df_long = yf.download(symbol, period="2y", interval="1d", progress=False, auto_adjust=False)
-        
-        # 2. MID DATA (for H4/H1) - 60 Days of 1h data
         df_mid = yf.download(symbol, period="60d", interval="1h", progress=False, auto_adjust=False)
-        
-        # 3. SHORT DATA (for M30/M15/M5) - 5 Days of 5m data
         df_short = yf.download(symbol, period="5d", interval="5m", progress=False, auto_adjust=False)
-
-        # Clean and Fix Timezones immediately
         return clean_data(df_long), clean_data(df_mid), clean_data(df_short)
     except Exception as e:
         print(e)
@@ -124,9 +106,7 @@ def calculate_structure(df, lookback):
     df['Rolling_Min'] = df['Low'].rolling(window=lookback).min()
     
     state_list = []
-    curr_state = -1 # Default Bearish
-    
-    # Initialization
+    curr_state = -1 
     curr_res = df['High'].iloc[0]
     curr_sup = df['Low'].iloc[0]
     
@@ -158,67 +138,62 @@ def get_trend_start_time(df):
             return df.index[i+1] if i+1 < len(df) else df.index[i]
     return df.index[0]
 
-# --- 🧠 HIERARCHY LOGIC: SETUP -> FILTER -> TRIGGER ---
+# --- 🧠 HIERARCHY LOGIC: LRCF / HRCF ---
 def analyze_hierarchy(df_setup, df_filter, df_trigger, setup_name, filter_name, trigger_name):
     if df_setup is None or df_filter is None or df_trigger is None:
-        return "N/A", "Loading Data...", "#37474F"
+        return "N/A", "Loading...", "#37474F"
 
     # 1. SETUP PHASE
     setup_state = df_setup['State'].iloc[-1]
+    setup_dir = "BUY" if setup_state == "BULLISH" else "SELL"
     setup_start = get_trend_start_time(df_setup)
     
     # 2. VALID RETRACEMENT (VR) PHASE
-    # Slice Filter data to only include candles AFTER Setup started
     df_filter_slice = df_filter[df_filter.index >= setup_start].copy()
     
     if df_filter_slice.empty: 
-        return "WAITING VR", f"{setup_name} Just Started. No Data yet on {filter_name}", "#37474F"
+        return "WAITING VR", f"Setup: {setup_name} {setup_dir} | Type: N/A | Status: No Data", "#37474F"
 
     vr_target_state = "BEARISH" if setup_state == "BULLISH" else "BULLISH"
     vr_candles = df_filter_slice[df_filter_slice['State'] == vr_target_state]
     
-    # If Filter has NEVER gone opposite to Setup since Setup started
+    # No VR yet (Filter never pulled back)
     if vr_candles.empty:
-        return "⏳ WAITING VR", f"{setup_name} is {setup_state}. Waiting for {filter_name} pullback.", "#FF6D00"
+        return "⏳ WAITING VR", f"Setup: {setup_name} {setup_dir} | Type: PULLBACK | Status: Waiting for VR", "#FF6D00"
 
-    # VR Has happened, get its origin time
     first_vr_time = vr_candles.index[0]
     
     # 3. CONFIRMATION / TRIGGER PHASE
     curr_filter_state = df_filter['State'].iloc[-1]
     curr_trigger_state = df_trigger['State'].iloc[-1]
     
-    # A. LOW RISK: The Filter TF itself aligns with Setup
+    # A. LOW RISK (LRCF)
     if curr_filter_state == setup_state:
-        # Count re-entries logic
         df_after_vr = df_filter_slice[df_filter_slice.index >= first_vr_time]
         df_after_vr['group'] = (df_after_vr['State'] != df_after_vr['State'].shift()).cumsum()
         cf_count = len(df_after_vr[df_after_vr['State'] == setup_state]['group'].unique())
-        tag = "Origin" if cf_count == 1 else f"Re-Entry {cf_count}"
+        tag = "(Origin)" if cf_count == 1 else f"(Re-Entry {cf_count})"
         
-        return f"💎 LOW RISK ({filter_name})", f"{setup_name} & {filter_name} Aligned. ({tag})", "#00C853"
+        return f"💎 LRCF {setup_dir}", f"Setup: {setup_name} {setup_dir} | Type: LRCF ({filter_name}) | Status: CF Formed {tag}", "#00C853"
 
-    # B. HIGH RISK: Filter is still Retracing, but Lower TF (Trigger) has aligned
+    # B. HIGH RISK (HRCF)
     elif curr_trigger_state == setup_state:
-        return f"⚠️ HIGH RISK ({trigger_name})", f"{filter_name} Retracing, but {trigger_name} Aligned.", "#FF9100"
+        return f"⚠️ HRCF {setup_dir}", f"Setup: {setup_name} {setup_dir} | Type: HRCF ({trigger_name}) | Status: CF Formed (Aggressive)", "#FF9100"
 
-    # C. WAITING: Both Filter and Trigger are against Trend
+    # C. WAITING CF (VR is Formed, but no break yet)
     else:
-        return "💤 WAITING CF", f"VR Active on {filter_name}. Waiting for Break.", "#37474F"
+        return "💤 WAITING CF", f"Setup: {setup_name} {setup_dir} | Type: {filter_name} VR | Status: VR Formed (Waiting Break)", "#37474F"
 
 # --- 6. PLOTTING ---
 def plot_candlestick(df, title, state):
     if df is None or df.empty: return go.Figure()
-    df_slice = df.tail(80) # Show last 80 candles
+    df_slice = df.tail(80) 
     fig = go.Figure()
-    
     c = '#00C853' if state == "BULLISH" else '#FF5252'
-    
     fig.add_trace(go.Candlestick(
         x=df_slice.index, open=df_slice['Open'], high=df_slice['High'], low=df_slice['Low'], close=df_slice['Close'],
         name='Price', increasing_line_color='#00C853', decreasing_line_color='#FF5252'
     ))
-
     fig.update_layout(
         title=dict(text=f"{title} ({state})", font=dict(color=c)), height=300,
         margin=dict(t=30,b=0,l=0,r=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
@@ -227,7 +202,7 @@ def plot_candlestick(df, title, state):
     )
     return fig
 
-# --- 7. ALERTS ---
+# --- 7. ALERTS (UPDATED FORMAT) ---
 def send_telegram_msg(message):
     if not enable_tg or not tg_token or not tg_chat_id: return
     try: requests.post(f"https://api.telegram.org/bot{tg_token}/sendMessage", data={"chat_id": tg_chat_id, "text": message}, timeout=5)
@@ -241,101 +216,82 @@ def check_and_alert(header, signal, desc):
     
     if sig_key != last_sig:
         st.session_state.alert_state[header] = sig_key
-        # Logic to send messages only on Breaks/Entries
-        if "LOW RISK" in signal or "HIGH RISK" in signal:
-            icon = "💎" if "LOW RISK" in signal else "⚠️"
-            msg = f"{icon} **{header} SIGNAL**\nSignal: {signal}\nDesc: {desc}\n🔥 CHECK CHART"
+        
+        if "LRCF" in signal or "HRCF" in signal:
+            icon = "💎" if "LRCF" in signal else "⚠️"
+            # Split details by pipe ' | ' for cleaner telegram lines
+            formatted_desc = desc.replace(" | ", "\n")
+            
+            msg = f"{icon} **{header} SIGNAL**\n{formatted_desc}\n🔥 CHECK CHART"
             send_telegram_msg(msg)
 
 # --- 8. MAIN EXECUTION ---
-st.title(f"🏆 BONKER V5.1: MULTI-TIMEFRAME HIERARCHY ({symbol})")
+st.title(f"🏆 BONKER V5.2: CUSTOM ALERTS ({symbol})")
 
-# DEFINE TABS
-tabs = st.tabs([
-    "Weekly (W-D-H4)", 
-    "Daily (D-H4-H1)", 
-    "H4 (H4-H1-M30)", 
-    "H1 (H1-M30-M15)", 
-    "M30 (M30-M15-M5)"
-])
+tabs = st.tabs(["Weekly", "Daily", "H4", "H1", "M30"])
 
 if "run" not in st.session_state: st.session_state.run = True
 if stop_btn: st.session_state.run = False
 
 try:
     while st.session_state.run:
-        # Fetch Data Batches
         df_long_raw, df_mid_raw, df_short_raw = fetch_hierarchical_data(symbol)
         
         if df_long_raw is not None and df_mid_raw is not None and df_short_raw is not None:
-            # --- PREPARE DATAFRAMES ---
-            # Weekly / Daily
+            # Structures
             df_w1, s_w1 = calculate_structure(resample_data(df_long_raw.copy(), "1wk"), sensitivity)
             df_d1, s_d1 = calculate_structure(df_long_raw.copy(), sensitivity)
-            
-            # H4 / H1
             df_h4, s_h4 = calculate_structure(resample_data(df_mid_raw.copy(), "4h"), sensitivity)
-            df_h1, s_h1 = calculate_structure(df_mid_raw.copy(), sensitivity) # Native 1h
-            
-            # M30 / M15 / M5
+            df_h1, s_h1 = calculate_structure(df_mid_raw.copy(), sensitivity)
             df_m30, s_m30 = calculate_structure(resample_data(df_short_raw.copy(), "30m"), sensitivity)
             df_m15, s_m15 = calculate_structure(resample_data(df_short_raw.copy(), "15m"), sensitivity)
-            df_m5, s_m5 = calculate_structure(df_short_raw.copy(), sensitivity) # Native 5m
+            df_m5, s_m5 = calculate_structure(df_short_raw.copy(), sensitivity)
 
-            # --- TAB 1: WEEKLY ---
+            # --- ANALYSIS ---
             with tabs[0]:
-                # Setup: W1 | Filter: D1 | Trigger: H4
                 sig, desc, col = analyze_hierarchy(df_w1, df_d1, df_h4, "W1", "D1", "H4")
                 check_and_alert("WEEKLY SETUP", sig, desc)
                 st.markdown(f"<div style='background:{col};padding:10px;border-radius:5px;text-align:center;'><h3>{sig}</h3><p>{desc}</p></div>", unsafe_allow_html=True)
                 c1, c2, c3 = st.columns(3)
-                with c1: st.plotly_chart(plot_candlestick(df_w1, "SETUP (W1)", s_w1), use_container_width=True)
-                with c2: st.plotly_chart(plot_candlestick(df_d1, "FILTER/LR (D1)", s_d1), use_container_width=True)
-                with c3: st.plotly_chart(plot_candlestick(df_h4, "HR TRIGGER (H4)", s_h4), use_container_width=True)
+                with c1: st.plotly_chart(plot_candlestick(df_w1, "W1", s_w1), use_container_width=True)
+                with c2: st.plotly_chart(plot_candlestick(df_d1, "D1", s_d1), use_container_width=True)
+                with c3: st.plotly_chart(plot_candlestick(df_h4, "H4", s_h4), use_container_width=True)
 
-            # --- TAB 2: DAILY ---
             with tabs[1]:
-                # Setup: D1 | Filter: H4 | Trigger: H1
                 sig, desc, col = analyze_hierarchy(df_d1, df_h4, df_h1, "D1", "H4", "H1")
                 check_and_alert("DAILY SETUP", sig, desc)
                 st.markdown(f"<div style='background:{col};padding:10px;border-radius:5px;text-align:center;'><h3>{sig}</h3><p>{desc}</p></div>", unsafe_allow_html=True)
                 c1, c2, c3 = st.columns(3)
-                with c1: st.plotly_chart(plot_candlestick(df_d1, "SETUP (D1)", s_d1), use_container_width=True)
-                with c2: st.plotly_chart(plot_candlestick(df_h4, "FILTER/LR (H4)", s_h4), use_container_width=True)
-                with c3: st.plotly_chart(plot_candlestick(df_h1, "HR TRIGGER (H1)", s_h1), use_container_width=True)
+                with c1: st.plotly_chart(plot_candlestick(df_d1, "D1", s_d1), use_container_width=True)
+                with c2: st.plotly_chart(plot_candlestick(df_h4, "H4", s_h4), use_container_width=True)
+                with c3: st.plotly_chart(plot_candlestick(df_h1, "H1", s_h1), use_container_width=True)
 
-            # --- TAB 3: H4 ---
             with tabs[2]:
-                # Setup: H4 | Filter: H1 | Trigger: M30
                 sig, desc, col = analyze_hierarchy(df_h4, df_h1, df_m30, "H4", "H1", "M30")
                 check_and_alert("H4 SETUP", sig, desc)
                 st.markdown(f"<div style='background:{col};padding:10px;border-radius:5px;text-align:center;'><h3>{sig}</h3><p>{desc}</p></div>", unsafe_allow_html=True)
                 c1, c2, c3 = st.columns(3)
-                with c1: st.plotly_chart(plot_candlestick(df_h4, "SETUP (H4)", s_h4), use_container_width=True)
-                with c2: st.plotly_chart(plot_candlestick(df_h1, "FILTER/LR (H1)", s_h1), use_container_width=True)
-                with c3: st.plotly_chart(plot_candlestick(df_m30, "HR TRIGGER (M30)", s_m30), use_container_width=True)
+                with c1: st.plotly_chart(plot_candlestick(df_h4, "H4", s_h4), use_container_width=True)
+                with c2: st.plotly_chart(plot_candlestick(df_h1, "H1", s_h1), use_container_width=True)
+                with c3: st.plotly_chart(plot_candlestick(df_m30, "M30", s_m30), use_container_width=True)
 
-            # --- TAB 4: H1 ---
             with tabs[3]:
-                # Setup: H1 | Filter: M30 | Trigger: M15
                 sig, desc, col = analyze_hierarchy(df_h1, df_m30, df_m15, "H1", "M30", "M15")
                 check_and_alert("H1 SETUP", sig, desc)
                 st.markdown(f"<div style='background:{col};padding:10px;border-radius:5px;text-align:center;'><h3>{sig}</h3><p>{desc}</p></div>", unsafe_allow_html=True)
                 c1, c2, c3 = st.columns(3)
-                with c1: st.plotly_chart(plot_candlestick(df_h1, "SETUP (H1)", s_h1), use_container_width=True)
-                with c2: st.plotly_chart(plot_candlestick(df_m30, "FILTER/LR (M30)", s_m30), use_container_width=True)
-                with c3: st.plotly_chart(plot_candlestick(df_m15, "HR TRIGGER (M15)", s_m15), use_container_width=True)
-            
-            # --- TAB 5: M30 ---
+                with c1: st.plotly_chart(plot_candlestick(df_h1, "H1", s_h1), use_container_width=True)
+                with c2: st.plotly_chart(plot_candlestick(df_m30, "M30", s_m30), use_container_width=True)
+                with c3: st.plotly_chart(plot_candlestick(df_m15, "M15", s_m15), use_container_width=True)
+
             with tabs[4]:
-                # Setup: M30 | Filter: M15 | Trigger: M5
                 sig, desc, col = analyze_hierarchy(df_m30, df_m15, df_m5, "M30", "M15", "M5")
                 check_and_alert("M30 SETUP", sig, desc)
                 st.markdown(f"<div style='background:{col};padding:10px;border-radius:5px;text-align:center;'><h3>{sig}</h3><p>{desc}</p></div>", unsafe_allow_html=True)
                 c1, c2, c3 = st.columns(3)
-                with c1: st.plotly_chart(plot_candlestick(df_m30, "SETUP (M30)", s_m30), use_container_width=True)
-                with c2: st.plotly_chart(plot_candlestick(df_m15, "FILTER/LR (M15)", s_m15), use_container_width=True)
-                with c3: st.plotly_chart(plot_candlestick(df_m5, "HR TRIGGER (M5)", s_m5), use_container_width=True)
+                with c1: st.plotly_chart(plot_candlestick(df_m30, "M30", s_m30), use_container_width=True)
+                with c2: st.plotly_chart(plot_candlestick(df_m15, "M15", s_m15), use_container_width=True)
+                with c3: st.plotly_chart(plot_candlestick(df_m5, "M5", s_m5), use_container_width=True)
 
             time.sleep(refresh_rate)
             st.rerun()
